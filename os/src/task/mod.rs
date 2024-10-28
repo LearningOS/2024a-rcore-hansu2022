@@ -14,9 +14,10 @@ mod switch;
 #[allow(clippy::module_inception)]
 mod task;
 
-use crate::config::MAX_APP_NUM;
+use crate::config::{MAX_APP_NUM, MAX_SYSCALL_NUM};
 use crate::loader::{get_num_app, init_app_cx};
 use crate::sync::UPSafeCell;
+use crate::timer::get_time_us;
 use lazy_static::*;
 use switch::__switch;
 pub use task::{TaskControlBlock, TaskStatus};
@@ -51,10 +52,7 @@ lazy_static! {
     /// Global variable: TASK_MANAGER
     pub static ref TASK_MANAGER: TaskManager = {
         let num_app = get_num_app();
-        let mut tasks = [TaskControlBlock {
-            task_cx: TaskContext::zero_init(),
-            task_status: TaskStatus::UnInit,
-        }; MAX_APP_NUM];
+        let mut tasks = [TaskControlBlock::new(); MAX_APP_NUM];
         for (i, task) in tasks.iter_mut().enumerate() {
             task.task_cx = TaskContext::goto_restore(init_app_cx(i));
             task.task_status = TaskStatus::Ready;
@@ -76,10 +74,14 @@ impl TaskManager {
     ///
     /// Generally, the first task in task list is an idle task (we call it zero process later).
     /// But in ch3, we load apps statically, so the first task is a real app.
+    
     fn run_first_task(&self) -> ! {
         let mut inner = self.inner.exclusive_access();
         let task0 = &mut inner.tasks[0];
         task0.task_status = TaskStatus::Running;
+        if task0.first_schedule_time.is_none(){
+            task0.first_schedule_time = Some(get_time_us());
+        }
         let next_task_cx_ptr = &task0.task_cx as *const TaskContext;
         drop(inner);
         let mut _unused = TaskContext::zero_init();
@@ -121,7 +123,13 @@ impl TaskManager {
         if let Some(next) = self.find_next_task() {
             let mut inner = self.inner.exclusive_access();
             let current = inner.current_task;
-            inner.tasks[next].task_status = TaskStatus::Running;
+
+            let next_task = &mut inner.tasks[next];
+            if next_task.first_schedule_time.is_none(){
+                next_task.first_schedule_time = Some(get_time_us());
+            }
+            next_task.task_status = TaskStatus::Running;
+
             inner.current_task = next;
             let current_task_cx_ptr = &mut inner.tasks[current].task_cx as *mut TaskContext;
             let next_task_cx_ptr = &inner.tasks[next].task_cx as *const TaskContext;
@@ -135,12 +143,49 @@ impl TaskManager {
             panic!("All applications completed!");
         }
     }
+    /// Get information about the current task, including status, syscall statistics, and first schedule time
+    pub fn get_current_task_info(&self) -> (TaskStatus, [u32; MAX_SYSCALL_NUM], Option<usize>) {
+        let inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        let task = &inner.tasks[current];
+        (task.task_status, task.syscall_times, task.first_schedule_time)
+    }
+    /// Increment the syscall counter for the given syscall ID
+    pub fn increment_syscall(&self, syscall_id: usize) {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        if syscall_id < MAX_SYSCALL_NUM {
+            inner.tasks[current].syscall_times[syscall_id] += 1;
+        }
+    }
+    /// Check if the current task is in Running status
+    pub fn is_current_task_running(&self) -> bool {
+        let inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].task_status == TaskStatus::Running
+    }
 }
 
+/// Get information about the current task
+pub fn get_current_task_info() -> (TaskStatus, [u32; MAX_SYSCALL_NUM], Option<usize>) {
+    TASK_MANAGER.get_current_task_info()
+}
+
+/// Increment the syscall counter for the given syscall ID
+pub fn increment_syscall(syscall_id: usize) {
+    TASK_MANAGER.increment_syscall(syscall_id)
+}
+
+/// Check if the current task is in Running status
+pub fn is_current_task_running() -> bool {
+    TASK_MANAGER.is_current_task_running()
+}
 /// Run the first task in task list.
 pub fn run_first_task() {
     TASK_MANAGER.run_first_task();
 }
+
+
 
 /// Switch current `Running` task to the task we have found,
 /// or there is no `Ready` task and we can exit with all applications completed

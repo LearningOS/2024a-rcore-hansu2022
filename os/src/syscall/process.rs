@@ -1,8 +1,6 @@
 //! Process management syscalls
 use crate::{
-    config::MAX_SYSCALL_NUM,
-    task::{exit_current_and_run_next, suspend_current_and_run_next, TaskStatus},
-    timer::get_time_us,
+    config::MAX_SYSCALL_NUM, task::{exit_current_and_run_next,  suspend_current_and_run_next, TaskStatus,get_current_task_info,}, timer::get_time_us,
 };
 
 #[repr(C)]
@@ -13,6 +11,7 @@ pub struct TimeVal {
 }
 
 /// Task information
+#[derive(Clone, Copy)]
 #[allow(dead_code)]
 pub struct TaskInfo {
     /// Task status in it's life cycle
@@ -51,7 +50,34 @@ pub fn sys_get_time(ts: *mut TimeVal, _tz: usize) -> isize {
 }
 
 /// YOUR JOB: Finish sys_task_info to pass testcases
-pub fn sys_task_info(_ti: *mut TaskInfo) -> isize {
+pub fn sys_task_info(ti: *mut TaskInfo) -> isize {
     trace!("kernel: sys_task_info");
-    -1
+    
+    if ti.is_null() {
+        return -1;
+    }
+
+    let (status, syscall_times, first_schedule_time) = get_current_task_info();
+    
+    // 检查任务状态
+    if status != TaskStatus::Running || first_schedule_time.is_none() {
+        return -1;
+    }
+
+    // 计算运行时间
+    let current_time = get_time_us();
+    let run_time_ms = (current_time - first_schedule_time.unwrap()) / 1000;
+
+    // 填充任务信息
+    unsafe {
+        *ti = TaskInfo {
+            status,
+            syscall_times,
+            time: run_time_ms,
+        };
+    }
+
+    
+
+    0
 }
