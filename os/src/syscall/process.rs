@@ -43,10 +43,7 @@ pub fn sys_yield() -> isize {
 pub fn sys_get_time(ts: *mut TimeVal, _tz: usize) -> isize {
     trace!("kernel: sys_get_time");
     let token = current_user_token();
-    let ts_vs = VirtAddr::from(ts as usize);
-    if !ts_vs.aligned(){
-        return -1;
-    }
+    
 
     let us = get_time_us();
     let ts_val = TimeVal{
