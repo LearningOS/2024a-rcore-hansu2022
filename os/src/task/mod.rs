@@ -116,7 +116,13 @@ impl TaskManager {
         let end = VirtAddr::from(start.0 + len);
         memory_set.munmap(start, end)
     }
-
+    /// Add the number of syscall times for current task
+    fn add_syscall_times(&self, syscall_id: usize) {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].syscall_times[syscall_id] += 1;
+    }
+    
     /// Change the status of current `Running` task into `Ready`.
     fn mark_current_suspended(&self) {
         let mut inner = self.inner.exclusive_access();
@@ -244,4 +250,8 @@ pub fn mmap_handler(start: VirtAddr,len: usize,permisson: MapPermission)-> bool{
 /// Handle the munmap system call
 pub fn munmap_handler(start: VirtAddr,len: usize)-> bool{
     TASK_MANAGER.munmap_handler(start,len)
+}
+/// Add the number of syscall times for current task
+pub fn add_syscall_times(syscall_id: usize) {
+    TASK_MANAGER.add_syscall_times(syscall_id);
 }

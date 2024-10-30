@@ -81,10 +81,7 @@ pub fn sys_task_info(ti: *mut TaskInfo) -> isize {
     trace!("kernel: sys_task_info");
     let token = current_user_token();
 
-    let ti_va = VirtAddr::from(ti as usize);
-    if !ti_va.aligned(){
-        return -1;
-    }
+
 
     let (status,syscall_times,start_time) = get_current_task_info();
 
