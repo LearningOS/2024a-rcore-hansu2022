@@ -47,6 +47,85 @@ impl MemorySet {
             areas: Vec::new(),
         }
     }
+
+    /// Map a virtual address to a physical address with specified permission.
+    pub fn mmap(&mut self, start:VirtAddr,end:VirtAddr,permission: MapPermission)->bool{
+        if self.check_va_range_mapped(start,end){
+            return false;
+        }
+
+        let map_area = MapArea::new(start,end,MapType::Framed,permission);
+
+        self.push(map_area,None);
+
+        true
+    }
+
+    /// Unmap a virtual address range
+    pub fn munmap(&mut self, start: VirtAddr, end: VirtAddr) -> bool {
+        // 检查地址对齐
+        if !start.aligned() || !end.aligned() {
+            return false;
+        }
+
+        let start_vpn = start.floor();
+        let end_vpn = end.ceil();
+
+        // 找到对应的区域
+        if let Some(idx) = self.areas.iter().position(|area| {
+            area.vpn_range.get_start() <= start_vpn && area.vpn_range.get_end() >= end_vpn
+        }) {
+            // 取出要解除映射的区域
+            let mut area = self.areas.remove(idx);
+            
+            // 依次解除每个页的映射
+            for vpn in VPNRange::new(start_vpn, end_vpn) {
+                area.unmap_one(&mut self.page_table, vpn);
+            }
+            
+            // 如果区域被分割，需要处理剩余部分
+            // 前半部分
+            if area.vpn_range.get_start() < start_vpn {
+                self.push(
+                    MapArea::new(
+                        area.vpn_range.get_start().into(),
+                        start,
+                        area.map_type,
+                        area.map_perm,
+                    ),
+                    None,
+                );
+            }
+            // 后半部分
+            if area.vpn_range.get_end() > end_vpn {
+                self.push(
+                    MapArea::new(
+                        end,
+                        area.vpn_range.get_end().into(),
+                        area.map_type,
+                        area.map_perm,
+                    ),
+                    None,
+                );
+            }
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Check if a virtual address range has been mapped
+    pub fn check_va_range_mapped(&self, start_va: VirtAddr, end_va: VirtAddr) -> bool {
+        let start_vpn = start_va.floor();
+        let end_vpn = end_va.ceil();
+        for area in &self.areas {
+            if area.vpn_range.overlapped(&VPNRange::new(start_vpn, end_vpn)) {
+                return true;
+            }
+        }
+        false
+    }
+
     /// Get the page table token
     pub fn token(&self) -> usize {
         self.page_table.token()
@@ -355,6 +434,12 @@ impl MapArea {
             }
             current_vpn.step();
         }
+    }
+}
+
+impl VPNRange {
+    pub fn overlapped(&self, other: &Self) -> bool {
+        self.get_start() < other.get_end() && other.get_start() < self.get_end()
     }
 }
 

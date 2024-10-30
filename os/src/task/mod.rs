@@ -14,11 +14,14 @@ mod switch;
 #[allow(clippy::module_inception)]
 mod task;
 
+use crate::config::MAX_SYSCALL_NUM;
 use crate::loader::{get_app_data, get_num_app};
+use crate::mm::{MapPermission, VirtAddr};
 use crate::sync::UPSafeCell;
 use crate::trap::TrapContext;
 use alloc::vec::Vec;
 use lazy_static::*;
+
 use switch::__switch;
 pub use task::{TaskControlBlock, TaskStatus};
 
@@ -87,6 +90,31 @@ impl TaskManager {
             __switch(&mut _unused as *mut _, next_task_cx_ptr);
         }
         panic!("unreachable in run_first_task!");
+    }
+    /// Get the current 'Running' task's information
+    fn get_current_task_info(&self) -> (TaskStatus,[u32;MAX_SYSCALL_NUM],usize){
+        let inner = self.inner.exclusive_access();
+        let cur = inner.current_task;
+        let task = &inner.tasks[cur];
+        (task.task_status,task.syscall_times.clone(),task.start_time)
+    }
+
+     /// Handle mmap operation for current task
+    fn mmap_handler(&self, start: VirtAddr, len: usize, permission: MapPermission) -> bool {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        let memory_set = &mut inner.tasks[current].memory_set;
+        let end = VirtAddr::from(start.0 + len);
+        memory_set.mmap(start, end, permission)
+    }
+
+    /// Handle munmap operation for current task
+    fn munmap_handler(&self, start: VirtAddr, len: usize) -> bool {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        let memory_set = &mut inner.tasks[current].memory_set;
+        let end = VirtAddr::from(start.0 + len);
+        memory_set.munmap(start, end)
     }
 
     /// Change the status of current `Running` task into `Ready`.
@@ -201,4 +229,19 @@ pub fn current_trap_cx() -> &'static mut TrapContext {
 /// Change the current 'Running' task's program break
 pub fn change_program_brk(size: i32) -> Option<usize> {
     TASK_MANAGER.change_current_program_brk(size)
+}
+
+/// Get the current 'Running' task's information
+pub fn get_current_task_info() -> (TaskStatus,[u32;MAX_SYSCALL_NUM],usize){
+    TASK_MANAGER.get_current_task_info()
+}
+
+/// Handle the mmap system call
+pub fn mmap_handler(start: VirtAddr,len: usize,permisson: MapPermission)-> bool{
+    TASK_MANAGER.mmap_handler(start,len,permisson)
+}
+
+/// Handle the munmap system call
+pub fn munmap_handler(start: VirtAddr,len: usize)-> bool{
+    TASK_MANAGER.munmap_handler(start,len)
 }
