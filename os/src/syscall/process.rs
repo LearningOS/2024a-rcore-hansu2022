@@ -4,13 +4,13 @@ use alloc::sync::Arc;
 use crate::{
     config::MAX_SYSCALL_NUM,
     loader::get_app_data_by_name,
-    mm::{translated_refmut, translated_str},
+    
     task::{
         add_task, current_task, current_user_token, exit_current_and_run_next,
         suspend_current_and_run_next, TaskStatus,
-    },
+    }, timer::get_time_us,
 };
-
+use crate::mm::*;
 #[repr(C)]
 #[derive(Debug)]
 pub struct TimeVal {
@@ -117,41 +117,167 @@ pub fn sys_waitpid(pid: isize, exit_code_ptr: *mut i32) -> isize {
 /// YOUR JOB: get time with second and microsecond
 /// HINT: You might reimplement it with virtual memory management.
 /// HINT: What if [`TimeVal`] is splitted by two pages ?
-pub fn sys_get_time(_ts: *mut TimeVal, _tz: usize) -> isize {
+pub fn sys_get_time(ts: *mut TimeVal, _tz: usize) -> isize {
     trace!(
-        "kernel:pid[{}] sys_get_time NOT IMPLEMENTED",
+        "kernel:pid[{}] sys_get_time ",
         current_task().unwrap().pid.0
     );
-    -1
+    let token = current_user_token();
+
+    let us = get_time_us();
+
+    let ts_val = TimeVal {
+        sec: us / 1_000_000,
+        usec: us % 1_000_000,
+    };
+
+    let byte_buffers = translated_byte_buffer(token, ts as *const u8, core::mem::size_of::<TimeVal>());
+
+    if byte_buffers.is_empty(){
+        return -1;
+    }
+
+    let mut written_bytes = 0;
+    let ts_bytes = unsafe {
+        core::slice::from_raw_parts(
+            &ts_val as *const TimeVal as *const u8,
+            core::mem::size_of::<TimeVal>()
+        )
+    };
+
+    for buffer in byte_buffers{
+        let len = buffer.len().min(core::mem::size_of::<TimeVal>() - written_bytes);
+        buffer[..len].copy_from_slice(&ts_bytes[written_bytes..written_bytes+len]);
+        written_bytes += len;
+        if written_bytes >= core::mem::size_of::<TimeVal>(){
+            break;
+        }
+    }
+    0
 }
 
 /// YOUR JOB: Finish sys_task_info to pass testcases
 /// HINT: You might reimplement it with virtual memory management.
 /// HINT: What if [`TaskInfo`] is splitted by two pages ?
-pub fn sys_task_info(_ti: *mut TaskInfo) -> isize {
+pub fn sys_task_info(ti: *mut TaskInfo) -> isize {
     trace!(
-        "kernel:pid[{}] sys_task_info NOT IMPLEMENTED",
+        "kernel:pid[{}] sys_task_info ",
         current_task().unwrap().pid.0
     );
-    -1
+    let token = current_user_token();
+    let task = current_task().unwrap();
+
+    let inner = task.inner_exclusive_access();
+
+    let task_info = TaskInfo{
+        status: inner.task_status,
+        syscall_times: inner.syscall_times,
+        time: (get_time_us() - inner.start_time) / 1_000_000,
+    };
+
+    let byte_buffers = translated_byte_buffer(token, ti as *const u8, core::mem::size_of::<TaskInfo>());
+
+    if byte_buffers.is_empty(){
+        return -1;
+    }
+
+    let mut written_bytes = 0;
+    let ti_bytes = unsafe {
+        core::slice::from_raw_parts(
+            &task_info as *const TaskInfo as *const u8,
+            core::mem::size_of::<TaskInfo>()
+        )
+    };
+
+    for buffer in byte_buffers{
+        let len = buffer.len().min(core::mem::size_of::<TaskInfo>() - written_bytes);
+        buffer[..len].copy_from_slice(&ti_bytes[written_bytes..written_bytes+len]);
+        written_bytes += len;
+        if written_bytes >= core::mem::size_of::<TaskInfo>(){
+            break;
+        }
+    }
+
+    0
 }
 
 /// YOUR JOB: Implement mmap.
-pub fn sys_mmap(_start: usize, _len: usize, _port: usize) -> isize {
+pub fn sys_mmap(start: usize, len: usize, port: usize) -> isize {
     trace!(
-        "kernel:pid[{}] sys_mmap NOT IMPLEMENTED",
+        "kernel:pid[{}] sys_mmap",
         current_task().unwrap().pid.0
     );
-    -1
+    let start_va = VirtAddr::from(start);
+    
+    
+    if !start_va.aligned(){
+        return -1;
+    }
+
+    if len == 0{
+        return -1;
+    }
+
+    if port & !0x7 != 0 || port & 0x7 == 0{
+        return -1;
+    }
+
+    if start.checked_add(len).is_none(){
+        return -1;
+    }
+
+    let mut permission = MapPermission::U;
+    if port & 0x1 != 0{
+        permission |= MapPermission::R;
+    }
+    if port & 0x2 != 0{
+        permission |= MapPermission::W;
+    }
+    if port & 0x4 != 0{
+        permission |= MapPermission::X;
+    }
+
+    let task = current_task().unwrap();
+    let mut inner = task.inner_exclusive_access();
+    let memory_set = &mut inner.memory_set;
+
+    let end_va = VirtAddr::from(start + len);
+
+    if memory_set.check_va_range_mapped(start_va, end_va){
+        return -1;
+    }
+
+    memory_set.insert_framed_area(start_va, end_va, permission);
+    0
 }
 
 /// YOUR JOB: Implement munmap.
-pub fn sys_munmap(_start: usize, _len: usize) -> isize {
+pub fn sys_munmap(start: usize, len: usize) -> isize {
     trace!(
-        "kernel:pid[{}] sys_munmap NOT IMPLEMENTED",
+        "kernel:pid[{}] sys_munmap",
         current_task().unwrap().pid.0
     );
-    -1
+    let start_va = VirtAddr::from(start);
+
+    if !start_va.aligned(){
+        return -1;
+    }
+
+    if start.checked_add(len).is_none(){
+        return -1;
+    }
+    if len == 0 {
+        return -1;
+    }
+
+    let task = current_task().unwrap();
+    let mut inner = task.inner_exclusive_access();
+    let memory_set = &mut inner.memory_set;
+
+
+    memory_set.remove_area_with_start_vpn(start_va.floor());
+
+    0
 }
 
 /// change data segment size

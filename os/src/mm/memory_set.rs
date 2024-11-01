@@ -48,6 +48,19 @@ impl MemorySet {
     pub fn token(&self) -> usize {
         self.page_table.token()
     }
+
+    /// Check if a virtual address range has been mapped
+    pub fn check_va_range_mapped(&self, start_va: VirtAddr, end_va: VirtAddr) -> bool {
+        let start_vpn = start_va.floor();
+        let end_vpn = end_va.ceil();
+        for area in &self.areas {
+            if area.vpn_range.overlapped(&VPNRange::new(start_vpn, end_vpn)) {
+                return true;
+            }
+        }
+        false
+    }
+
     /// Assume that no conflicts.
     pub fn insert_framed_area(
         &mut self,
@@ -310,6 +323,7 @@ pub struct MapArea {
 }
 
 impl MapArea {
+    /// Create a new `MapArea`.
     pub fn new(
         start_va: VirtAddr,
         end_va: VirtAddr,
@@ -325,6 +339,7 @@ impl MapArea {
             map_perm,
         }
     }
+    /// Create a new `MapArea` from another `MapArea`.
     pub fn from_another(another: &Self) -> Self {
         Self {
             vpn_range: VPNRange::new(another.vpn_range.get_start(), another.vpn_range.get_end()),
@@ -333,6 +348,7 @@ impl MapArea {
             map_perm: another.map_perm,
         }
     }
+    /// Get the start virtual page number of this `MapArea`.
     pub fn map_one(&mut self, page_table: &mut PageTable, vpn: VirtPageNum) {
         let ppn: PhysPageNum;
         match self.map_type {
@@ -348,22 +364,26 @@ impl MapArea {
         let pte_flags = PTEFlags::from_bits(self.map_perm.bits).unwrap();
         page_table.map(vpn, ppn, pte_flags);
     }
+    /// Unmap a virtual page number
     pub fn unmap_one(&mut self, page_table: &mut PageTable, vpn: VirtPageNum) {
         if self.map_type == MapType::Framed {
             self.data_frames.remove(&vpn);
         }
         page_table.unmap(vpn);
     }
+    /// Map all virtual page numbers in this `MapArea`.
     pub fn map(&mut self, page_table: &mut PageTable) {
         for vpn in self.vpn_range {
             self.map_one(page_table, vpn);
         }
     }
+    /// Unmap all virtual page numbers in this `MapArea`.
     pub fn unmap(&mut self, page_table: &mut PageTable) {
         for vpn in self.vpn_range {
             self.unmap_one(page_table, vpn);
         }
     }
+    /// shrink the area to new_end
     #[allow(unused)]
     pub fn shrink_to(&mut self, page_table: &mut PageTable, new_end: VirtPageNum) {
         for vpn in VPNRange::new(new_end, self.vpn_range.get_end()) {
@@ -371,6 +391,7 @@ impl MapArea {
         }
         self.vpn_range = VPNRange::new(self.vpn_range.get_start(), new_end);
     }
+    /// append the area to new_end
     #[allow(unused)]
     pub fn append_to(&mut self, page_table: &mut PageTable, new_end: VirtPageNum) {
         for vpn in VPNRange::new(self.vpn_range.get_end(), new_end) {
@@ -402,10 +423,19 @@ impl MapArea {
     }
 }
 
+impl VPNRange {
+    pub fn overlapped(&self, other: &Self) -> bool {
+        self.get_start() < other.get_end() && other.get_start() < self.get_end()
+    }
+}
+
 #[derive(Copy, Clone, PartialEq, Debug)]
 /// map type for memory set: identical or framed
+/// Map type for memory set: identical or framed
 pub enum MapType {
+    /// Identical mapping
     Identical,
+    /// Framed mapping
     Framed,
 }
 
