@@ -48,6 +48,16 @@ impl MemorySet {
     pub fn token(&self) -> usize {
         self.page_table.token()
     }
+    
+    /// Check if a memory area exists with exact match of start and len
+    pub fn check_va_range_exact_match(&self, start_va: VirtAddr, len: usize) -> bool {
+        let start_vpn = start_va.floor();
+        let end_vpn = VirtAddr::from(start_va.0 + len).ceil();
+        self.areas.iter().any(|area| {
+            area.vpn_range.get_start() == start_vpn && 
+            area.vpn_range.get_end() == end_vpn
+        })
+    }
 
     /// Check if a virtual address range has been mapped
     pub fn check_va_range_mapped(&self, start_va: VirtAddr, end_va: VirtAddr) -> bool {
