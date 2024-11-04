@@ -23,11 +23,17 @@ const INDIRECT2_BOUND: usize = INDIRECT1_BOUND + INODE_INDIRECT2_COUNT;
 /// Super block of a filesystem
 #[repr(C)]
 pub struct SuperBlock {
+    /// Magic number for sanity check
     magic: u32,
+    /// Total number of blocks
     pub total_blocks: u32,
+    /// Number of blocks for inode bitmap
     pub inode_bitmap_blocks: u32,
+    /// Number of blocks for inode area
     pub inode_area_blocks: u32,
+    /// Number of blocks for data bitmap
     pub data_bitmap_blocks: u32,
+    /// Number of blocks for data area
     pub data_area_blocks: u32,
 }
 
@@ -68,9 +74,11 @@ impl SuperBlock {
     }
 }
 /// Type of a disk inode
-#[derive(PartialEq)]
+#[derive(PartialEq,Clone, Copy)]
 pub enum DiskInodeType {
+    /// File
     File,
+    /// Directory
     Directory,
 }
 
@@ -81,11 +89,18 @@ type DataBlock = [u8; BLOCK_SZ];
 /// A disk inode
 #[repr(C)]
 pub struct DiskInode {
+    /// Size of the file
     pub size: u32,
+    /// Direct inodes
     pub direct: [u32; INODE_DIRECT_COUNT],
+    /// Indirect1 inode
     pub indirect1: u32,
+    /// Indirect2 inode
     pub indirect2: u32,
-    type_: DiskInodeType,
+    /// Type of the inode
+    pub type_: DiskInodeType,
+    /// Number of links to this inode
+    pub nlink: u32,
 }
 
 impl DiskInode {
@@ -97,7 +112,23 @@ impl DiskInode {
         self.indirect1 = 0;
         self.indirect2 = 0;
         self.type_ = type_;
+        self.nlink = 1;
     }
+    /// Get the number of links to this inode
+    pub fn get_nlink(&self) -> u32 {
+        self.nlink
+    }
+    
+    /// 新增：获取类型的方法
+    pub fn get_type(&self) -> DiskInodeType {
+        self.type_
+    }
+
+    /// Set the number of links to this inode
+    pub fn set_nlink(&mut self, nlink: u32) {
+        self.nlink = nlink;
+    }
+
     /// Whether this inode is a directory
     pub fn is_dir(&self) -> bool {
         self.type_ == DiskInodeType::Directory

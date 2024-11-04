@@ -6,7 +6,7 @@ mod stdio;
 use crate::mm::UserBuffer;
 
 /// trait File for all file types
-pub trait File: Send + Sync {
+pub trait File: Send + Sync{
     /// the file readable?
     fn readable(&self) -> bool;
     /// the file writable?
@@ -15,6 +15,10 @@ pub trait File: Send + Sync {
     fn read(&self, buf: UserBuffer) -> usize;
     /// write to the file from buf, return the number of bytes written
     fn write(&self, buf: UserBuffer) -> usize;
+    /// get the stat of the file
+    fn get_stat(&self) -> Option<Stat> {
+        None  // 默认实现返回None
+    }
 }
 
 /// The stat of a inode
@@ -46,5 +50,5 @@ bitflags! {
     }
 }
 
-pub use inode::{list_apps, open_file, OSInode, OpenFlags};
+pub use inode::{list_apps, open_file, OSInode, OpenFlags, ROOT_INODE};
 pub use stdio::{Stdin, Stdout};

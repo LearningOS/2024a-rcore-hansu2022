@@ -1,7 +1,7 @@
 //! Types related to task management & Functions for completely changing TCB
 use super::TaskContext;
 use super::{kstack_alloc, pid_alloc, KernelStack, PidHandle};
-use crate::config::TRAP_CONTEXT_BASE;
+use crate::config::{MAX_SYSCALL_NUM,TRAP_CONTEXT_BASE};
 use crate::fs::{File, Stdin, Stdout};
 use crate::mm::{MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE};
 use crate::sync::UPSafeCell;
@@ -10,7 +10,7 @@ use alloc::sync::{Arc, Weak};
 use alloc::vec;
 use alloc::vec::Vec;
 use core::cell::RefMut;
-
+use crate::timer::get_time_us;
 /// Task control block structure
 ///
 /// Directly save the contents that will not change during running
@@ -71,6 +71,14 @@ pub struct TaskControlBlockInner {
 
     /// Program break
     pub program_brk: usize,
+    /// Time spent in each syscall
+    pub syscall_times: [u32; MAX_SYSCALL_NUM],
+    /// Total running time
+    pub start_time: usize,
+    /// The stride of the task
+    pub stride:usize,
+    /// The priority of the task
+    pub priority:usize,
 }
 
 impl TaskControlBlockInner {
@@ -135,6 +143,10 @@ impl TaskControlBlock {
                     ],
                     heap_bottom: user_sp,
                     program_brk: user_sp,
+                    syscall_times: [0; MAX_SYSCALL_NUM],
+                    start_time: get_time_us(),
+                    stride:0,
+                    priority:16,
                 })
             },
         };
@@ -216,6 +228,10 @@ impl TaskControlBlock {
                     fd_table: new_fd_table,
                     heap_bottom: parent_inner.heap_bottom,
                     program_brk: parent_inner.program_brk,
+                    syscall_times: [0; MAX_SYSCALL_NUM],
+                    start_time: get_time_us(),
+                    stride:0,
+                    priority:16,
                 })
             },
         });

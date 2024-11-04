@@ -4,14 +4,15 @@
 //!
 //! `UPSafeCell<OSInodeInner>` -> `OSInode`: for static `ROOT_INODE`,we
 //! need to wrap `OSInodeInner` into `UPSafeCell`
-use super::File;
+use super::{File, Stat, StatMode};
+
 use crate::drivers::BLOCK_DEVICE;
 use crate::mm::UserBuffer;
 use crate::sync::UPSafeCell;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use bitflags::*;
-use easy_fs::{EasyFileSystem, Inode};
+use easy_fs::{EasyFileSystem, Inode, DiskInodeType};
 use lazy_static::*;
 
 /// inode in memory
@@ -37,6 +38,25 @@ impl OSInode {
             inner: unsafe { UPSafeCell::new(OSInodeInner { offset: 0, inode }) },
         }
     }
+
+    
+    
+    /// Get the status of the inode
+    pub fn get_stat(&self) -> Stat{
+        let inner = self.inner.exclusive_access();
+        Stat{
+            dev:0,
+            ino:inner.inode.inode_id() as u64,
+            mode:match inner.inode.get_type(){
+                DiskInodeType::Directory => StatMode::DIR,
+                DiskInodeType::File => StatMode::FILE,
+            },
+            nlink:inner.inode.get_nlink(),
+            pad:[0;7],
+        }
+    }
+    
+
     /// read all data from the inode
     pub fn read_all(&self) -> Vec<u8> {
         let mut inner = self.inner.exclusive_access();
@@ -54,7 +74,9 @@ impl OSInode {
     }
 }
 
+
 lazy_static! {
+    /// The root inode
     pub static ref ROOT_INODE: Arc<Inode> = {
         let efs = EasyFileSystem::open(BLOCK_DEVICE.clone());
         Arc::new(EasyFileSystem::root_inode(&efs))
@@ -155,4 +177,24 @@ impl File for OSInode {
         }
         total_write_size
     }
+
+    fn get_stat(&self) -> Option<Stat> {
+        // 获取inner的引用，用完立即释放
+        let inner = self.inner.exclusive_access();
+        let stat = Stat {
+            dev: 0,
+            ino: inner.inode.inode_id() as u64,
+            mode: match inner.inode.get_type() {
+                DiskInodeType::Directory => StatMode::DIR,
+                DiskInodeType::File => StatMode::FILE,
+            },
+            nlink: inner.inode.get_nlink(),
+            pad: [0; 7],
+        };
+        // 在返回前释放inner
+        drop(inner);
+        Some(stat)
+    }
+    
 }
+
