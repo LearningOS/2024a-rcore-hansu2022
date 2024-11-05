@@ -346,38 +346,40 @@ impl DiskInode {
         buf: &mut [u8],
         block_device: &Arc<dyn BlockDevice>,
     ) -> usize {
-        let mut start = offset;
-        let end = (offset + buf.len()).min(self.size as usize);
-        if start >= end {
-            return 0;
+        let mut current_block = offset / BLOCK_SZ;
+        let mut current_offset = offset % BLOCK_SZ;
+        let mut buf_offset = 0;
+        let mut size = 0;
+        
+        // 不要读取超过文件实际大小的数据
+        let file_size = self.size as usize;
+        let mut remaining = if offset + buf.len() > file_size {
+            file_size - offset
+        } else {
+            buf.len()
+        };
+        
+        // 读取数据
+        while remaining > 0 {
+            let block_read_size = remaining.min(BLOCK_SZ - current_offset);
+            let block_id = self.get_block_id(current_block as u32, block_device);
+            
+            let block_id = self.get_block_id(current_block as u32, block_device);
+            get_block_cache(block_id as usize, Arc::clone(block_device))
+                .lock()
+                .read(0, |data_block: &[u8; BLOCK_SZ]| {
+                    let src = &data_block[current_offset..current_offset + block_read_size];
+                    buf[buf_offset..buf_offset + block_read_size].copy_from_slice(src);
+                });
+            
+            size += block_read_size;
+            remaining -= block_read_size;
+            buf_offset += block_read_size;
+            current_block += 1;
+            current_offset = 0;
         }
-        let mut start_block = start / BLOCK_SZ;
-        let mut read_size = 0usize;
-        loop {
-            // calculate end of current block
-            let mut end_current_block = (start / BLOCK_SZ + 1) * BLOCK_SZ;
-            end_current_block = end_current_block.min(end);
-            // read and update read size
-            let block_read_size = end_current_block - start;
-            let dst = &mut buf[read_size..read_size + block_read_size];
-            get_block_cache(
-                self.get_block_id(start_block as u32, block_device) as usize,
-                Arc::clone(block_device),
-            )
-            .lock()
-            .read(0, |data_block: &DataBlock| {
-                let src = &data_block[start % BLOCK_SZ..start % BLOCK_SZ + block_read_size];
-                dst.copy_from_slice(src);
-            });
-            read_size += block_read_size;
-            // move to next block
-            if end_current_block == end {
-                break;
-            }
-            start_block += 1;
-            start = end_current_block;
-        }
-        read_size
+        
+        size
     }
     /// Write data into current disk inode
     /// size must be adjusted properly beforehand
@@ -387,36 +389,30 @@ impl DiskInode {
         buf: &[u8],
         block_device: &Arc<dyn BlockDevice>,
     ) -> usize {
-        let mut start = offset;
-        let end = (offset + buf.len()).min(self.size as usize);
-        assert!(start <= end);
-        let mut start_block = start / BLOCK_SZ;
-        let mut write_size = 0usize;
-        loop {
-            // calculate end of current block
-            let mut end_current_block = (start / BLOCK_SZ + 1) * BLOCK_SZ;
-            end_current_block = end_current_block.min(end);
-            // write and update write size
-            let block_write_size = end_current_block - start;
-            get_block_cache(
-                self.get_block_id(start_block as u32, block_device) as usize,
-                Arc::clone(block_device),
-            )
-            .lock()
-            .modify(0, |data_block: &mut DataBlock| {
-                let src = &buf[write_size..write_size + block_write_size];
-                let dst = &mut data_block[start % BLOCK_SZ..start % BLOCK_SZ + block_write_size];
-                dst.copy_from_slice(src);
-            });
-            write_size += block_write_size;
-            // move to next block
-            if end_current_block == end {
-                break;
-            }
-            start_block += 1;
-            start = end_current_block;
+        let mut current_block = offset / BLOCK_SZ;
+        let mut current_offset = offset % BLOCK_SZ;
+        let mut buf_offset = 0;
+        let mut size = 0;
+        
+        while buf_offset < buf.len() {
+            let block_write_size = (buf.len() - buf_offset).min(BLOCK_SZ - current_offset);
+            let block_id = self.get_block_id(current_block as u32, block_device);
+            
+            get_block_cache(block_id as usize, Arc::clone(block_device))
+                .lock()
+                .modify(0, |data_block: &mut [u8; BLOCK_SZ]| {
+                    let src = &buf[buf_offset..buf_offset + block_write_size];
+                    data_block[current_offset..current_offset + block_write_size]
+                        .copy_from_slice(src);
+                });
+            
+            size += block_write_size;
+            buf_offset += block_write_size;
+            current_block += 1;
+            current_offset = 0;
         }
-        write_size
+        
+        size
     }
 }
 /// A directory entry

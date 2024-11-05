@@ -63,9 +63,12 @@ impl Inode {
                 &self.block_device,
             );
         });
-        
+        old_inode.increase_nlink();
+        block_cache_sync_all();
         Some(old_inode.clone())
     }
+
+    
 
     /// Get the inode type
     pub fn get_nlink(&self) -> u32{
@@ -85,7 +88,8 @@ impl Inode {
     pub fn increase_nlink(&self){
         self.modify_disk_inode(|disk_inode|{
             disk_inode.set_nlink(disk_inode.get_nlink()+1);
-        })
+        });
+        block_cache_sync_all();
     }
     
     /// Decrease the link count of the inode.
@@ -94,11 +98,13 @@ impl Inode {
     ///
     /// `true` if the link count reaches zero, `false` otherwise.
     pub fn decrease_nlink(&self) -> bool {
-        self.modify_disk_inode(|disk_inode|{
+        let zero_links = self.modify_disk_inode(|disk_inode|{
             let new_nlink = disk_inode.get_nlink()-1;
             disk_inode.set_nlink(new_nlink);
             new_nlink == 0
-        })
+        });
+        block_cache_sync_all();
+        zero_links
     }
 
     /// Get the inode ID
@@ -114,9 +120,11 @@ impl Inode {
     }
     /// Call a function over a disk inode to modify it
     fn modify_disk_inode<V>(&self, f: impl FnOnce(&mut DiskInode) -> V) -> V {
-        get_block_cache(self.block_id, Arc::clone(&self.block_device))
+        let result = get_block_cache(self.block_id, Arc::clone(&self.block_device))
             .lock()
-            .modify(self.block_offset, f)
+            .modify(self.block_offset, f);
+        block_cache_sync_all();
+        result
     }
     /// Find inode under a disk inode by name
     fn find_inode_id(&self, name: &str, disk_inode: &DiskInode) -> Option<u32> {
@@ -235,15 +243,53 @@ impl Inode {
     /// Read data from current inode
     pub fn read_at(&self, offset: usize, buf: &mut [u8]) -> usize {
         let _fs = self.fs.lock();
-        self.read_disk_inode(|disk_inode| disk_inode.read_at(offset, buf, &self.block_device))
+        let size = self.read_disk_inode(|disk_inode| {
+            // 首先获取文件实际大小
+            let file_size = disk_inode.size as usize;
+            
+            // 确保不会读取超过文件末尾的数据
+            let mut read_size = buf.len();
+            if offset >= file_size {
+                return 0;
+            }
+            if offset + read_size > file_size {
+                read_size = file_size - offset;
+            }
+            
+            // 只读取实际数据的部分
+            let actual_read_size = disk_inode.read_at(
+                offset,
+                &mut buf[..read_size],
+                &self.block_device,
+            );
+            
+            actual_read_size
+        });
+        size
     }
     /// Write data to current inode
     pub fn write_at(&self, offset: usize, buf: &[u8]) -> usize {
         let mut fs = self.fs.lock();
         let size = self.modify_disk_inode(|disk_inode| {
-            self.increase_size((offset + buf.len()) as u32, disk_inode, &mut fs);
-            disk_inode.write_at(offset, buf, &self.block_device)
+            // 首先计算新的文件大小
+            let new_size = (offset + buf.len()) as u32;
+            if new_size > disk_inode.size {
+                // 只在需要时扩展文件大小
+                self.increase_size(new_size, disk_inode, &mut fs);
+            }
+            
+            // 写入数据
+            let written_size = disk_inode.write_at(offset, buf, &self.block_device);
+            
+            // 确保写入成功后再更新文件大小
+            if written_size > 0 && offset + written_size > disk_inode.size as usize {
+                disk_inode.size = (offset + written_size) as u32;
+            }
+            
+            written_size
         });
+        
+        // 确保修改被同步到磁盘
         block_cache_sync_all();
         size
     }
@@ -257,6 +303,7 @@ impl Inode {
             for data_block in data_blocks_dealloc.into_iter() {
                 fs.dealloc_data(data_block);
             }
+            disk_inode.size = 0;
         });
         block_cache_sync_all();
     }

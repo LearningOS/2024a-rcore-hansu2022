@@ -139,7 +139,6 @@ pub fn sys_linkat(old_name: *const u8, new_name: *const u8) -> isize {
         let fs = ROOT_INODE.create_link(&new_path, &old_inode);
         if fs.is_some() {
             // 增加硬链接计数
-            old_inode.increase_nlink();
             0
         } else {
             -1
@@ -166,7 +165,7 @@ pub fn sys_unlinkat(name: *const u8) -> isize {
             // 减少硬链接计数
             if inode.decrease_nlink() {
                 // 如果是最后一个链接，可以选择清除文件内容ch5
-                //inode.clear();
+                inode.clear();
             }
             return 0;
         }
